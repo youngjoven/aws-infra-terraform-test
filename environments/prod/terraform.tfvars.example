@@ -1,0 +1,80 @@
+# Terraform 변수 값 예제
+# 이 파일을 복사하여 terraform.tfvars로 저장하고 실제 값으로 변경하세요
+#
+# 사용 방법:
+# 1. cp terraform.tfvars.example terraform.tfvars
+# 2. terraform.tfvars 파일을 열어서 실제 값으로 변경
+# 3. terraform.tfvars 파일은 절대 Git에 커밋하지 마세요!
+
+# ==================== 기본 설정 ====================
+# AWS 리전 (예: ap-northeast-2, us-east-1, eu-west-1)
+aws_region = "ap-northeast-2"
+
+# 모든 리소스에 적용될 기본 태그
+default_tags = {
+  Environment = "prod"                # 환경 이름 (dev, staging, prod)
+  Project     = "eks-project"         # 프로젝트 이름
+  Team        = "Team Domodachi"      # 팀 이름
+  ManagedBy   = "Terraform"           # 관리 방법
+}
+
+# ==================== VPC 설정 ====================
+vpc_name             = "eks-vpc"                                      # VPC 이름
+vpc_cidr             = "10.100.0.0/16"                               # VPC CIDR 블록
+availability_zones   = ["ap-northeast-2a", "ap-northeast-2c"]        # 가용 영역 목록
+public_subnet_cidrs  = ["10.100.1.0/24", "10.100.2.0/24"]           # Public 서브넷 CIDR
+private_subnet_cidrs = ["10.100.11.0/24", "10.100.12.0/24"]         # Private 서브넷 CIDR
+enable_nat_gateway   = true                                           # NAT Gateway 활성화
+
+# ==================== EKS Cluster 설정 ====================
+cluster_name            = "eks-cluster"                  # EKS 클러스터 이름 (고유해야 함)
+cluster_version         = "1.31"                         # EKS 버전
+endpoint_private_access = true                           # Private 엔드포인트 활성화
+endpoint_public_access  = true                           # Public 엔드포인트 활성화
+
+# 활성화할 로그 타입
+# 옵션: "api", "audit", "authenticator", "controllerManager", "scheduler"
+enabled_log_types = ["api", "audit"]
+
+# 활성화할 Add-ons
+# 필수: "vpc-cni", "coredns", "kube-proxy"
+# 선택: "aws-ebs-csi-driver"
+enabled_addons = ["vpc-cni", "coredns", "kube-proxy"]
+
+# ==================== EKS Node Group 설정 ====================
+node_group_name   = "default"           # 노드 그룹 이름
+instance_types    = ["t3.medium"]       # 인스턴스 타입 (t3.medium, t3.large, m5.large 등)
+capacity_type     = "ON_DEMAND"         # 용량 타입 (ON_DEMAND 또는 SPOT)
+desired_size      = 2                   # 원하는 노드 수
+max_size          = 2                   # 최대 노드 수
+min_size          = 2                   # 최소 노드 수
+disk_size         = 20                  # 노드 디스크 크기 (GB)
+enable_monitoring = false               # 상세 모니터링 활성화 여부
+
+# ==================== 선택적 설정 ====================
+# 주석을 제거하고 필요에 따라 활성화하세요
+
+# SSM 접근 활성화 (노드 디버깅용)
+# enable_ssm = true
+
+# 추가 보안 그룹 생성
+# create_cluster_sg = true
+# create_node_sg = true
+
+# Public 엔드포인트 접근 CIDR 제한 (보안 강화)
+# public_access_cidrs = ["YOUR_IP/32"]  # 본인 IP로 변경
+
+# 노드 레이블 커스터마이징
+# node_labels = {
+#   role        = "worker"
+#   environment = "prod"
+# }
+
+# 노드 테인트 설정 (특정 워크로드만 스케줄링)
+# node_taints = [
+#   {
+#     key    = "dedicated"
+#     value  = "gpu"
+#     effect = "NoSchedule"
+#   }
+# ]

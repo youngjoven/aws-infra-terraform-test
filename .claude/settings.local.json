@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws ec2 describe-vpcs:*)",
+      "Bash(aws dynamodb list-tables:*)",
+      "Bash(aws cloudformation list-stacks:*)",
+      "Bash(aws elasticache describe-cache-clusters:*)",
+      "Bash(aws s3api list-buckets:*)",
+      "Bash(aws iam list-roles:*)",
+      "Bash(aws cloudtrail:*)",
+      "Bash(aws configservice describe-configuration-recorders:*)",
+      "Bash(aws sns list-topics:*)",
+      "Bash(aws iam list-policies:*)",
+      "Bash(aws servicecatalog:*)",
+      "Bash(aws organizations describe-organization:*)",
+      "Bash(aws logs describe-log-groups:*)",
+      "Bash(aws cloudformation:*)",
+      "Bash(aws iam list-attached-role-policies:*)",
+      "Bash(aws iam detach-role-policy:*)",
+      "Bash(aws iam delete-policy:*)",
+      "Bash(aws iam delete-role:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
