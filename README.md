@@ -1,29 +1,35 @@
 # AWS EKS Terraform 프로젝트
 
-Terraform을 사용하여 AWS EKS(Elastic Kubernetes Service) 클러스터를 모듈화된 구조로 배포하는 프로젝트입니다.
+Terraform을 사용하여 AWS EKS(Elastic Kubernetes Service) 클러스터를 **모듈화된 구조**로 배포하는 프로젝트입니다.
+
+이 문서는 실제 배포 경험을 바탕으로 작성되었으며, 발생 가능한 문제와 해결 방법을 포함합니다.
+
+---
 
 ## 📋 목차
 
 - [프로젝트 개요](#-프로젝트-개요)
-- [아키텍처](#-아키텍처)
+- [핵심 개념](#-핵심-개념)
 - [디렉토리 구조](#-디렉토리-구조)
+- [아키텍처](#-아키텍처)
 - [사전 요구사항](#-사전-요구사항)
-- [빠른 시작](#-빠른-시작)
-- [상세 가이드](#-상세-가이드)
-- [비용 예상](#-비용-예상)
+- [배포 가이드](#-배포-가이드)
 - [문제 해결](#-문제-해결)
+- [보안 가이드](#-보안-가이드)
+- [비용 관리](#-비용-관리)
 - [정리](#-정리)
 
 ---
 
 ## 🎯 프로젝트 개요
 
-이 프로젝트는 다음을 포함합니다:
+### 주요 특징
 
 - **모듈화된 Terraform 코드**: 재사용 가능한 5개의 모듈
 - **Production-ready EKS 클러스터**: 고가용성 및 보안 Best Practice 적용
 - **완전한 네트워킹**: VPC, 서브넷, NAT Gateway, 라우팅
 - **자동화된 노드 관리**: Managed Node Group with Auto Scaling
+- **안전한 State 관리**: S3 + DynamoDB로 State Lock 구현
 
 ### 구성
 
@@ -33,6 +39,89 @@ Terraform을 사용하여 AWS EKS(Elastic Kubernetes Service) 클러스터를 �
 - **가용 영역**: 2개 (ap-northeast-2a, ap-northeast-2c)
 - **노드 타입**: t3.medium (2 vCPU, 4GB RAM)
 - **노드 수**: 최소 2, 최대 2
+
+---
+
+## 💡 핵심 개념
+
+### 1. 왜 3개 디렉토리로 나눴나?
+
+```
+terraform_test/
+├── bootstrap/        # Backend 리소스 생성 (일회성)
+├── modules/         # 재사용 가능한 컴포넌트
+└── environments/    # 실제 환경별 설정
+```
+
+#### Bootstrap
+- **역할**: S3와 DynamoDB를 생성하여 Terraform Backend 준비
+- **특징**: backend 설정 없이 로컬 state 사용
+- **실행**: 프로젝트 시작 시 한 번만 실행
+
+#### Modules
+- **역할**: VPC, IAM, EKS 등 재사용 가능한 "레고 블록"
+- **특징**: 실제 값 없이 로직과 템플릿만 정의
+- **장점**: dev, stage, prod 어디서든 같은 코드를 다른 값으로 재사용
+
+#### Environments
+- **역할**: modules를 조합하여 실제 인프라 구성
+- **특징**: 구체적인 값들(terraform.tfvars)을 제공
+- **확장성**: 새 환경 추가 시 디렉토리만 복사하면 됨
+
+### 2. Backend와 State Lock
+
+#### Backend (S3)
+```
+역할: Terraform State를 "어디에 저장할지" 결정
+장점: 팀원들과 State 공유, 로컬 파일 손실 방지
+```
+
+#### State Lock (DynamoDB)
+```
+역할: 동시 apply 방지
+동작:
+  1. terraform apply 시작 → DynamoDB에 Lock 생성 🔒
+  2. 다른 사람이 apply 시도 → "Lock 걸려있음!" 오류 ❌
+  3. apply 완료 → Lock 해제 🔓
+```
+
+**실제 경험**: 작업 중단 시 Lock이 남아있어 `terraform force-unlock` 필요
+
+### 3. Terraform Import
+
+```
+배포(apply): Terraform 코드 → AWS에 리소스 생성
+Import:      AWS에 이미 존재하는 리소스 → Terraform State에 등록
+```
+
+**실제 경험**: apply 중단 후 일부 리소스가 AWS에만 존재하여 import 필요
+
+---
+
+## 📁 디렉토리 구조
+
+```
+terraform_test/
+├── bootstrap/                    # Backend 리소스 생성용
+│   ├── main.tf                  # S3 버킷, DynamoDB 테이블 정의
+│   ├── variables.tf
+│   └── outputs.tf
+├── modules/                      # 재사용 가능한 모듈
+│   ├── vpc/                     # VPC 및 네트워킹
+│   ├── iam/                     # IAM 역할 및 정책
+│   ├── security-group/          # 보안 그룹
+│   ├── eks-cluster/             # EKS 클러스터 & Addons
+│   └── eks-node-group/          # EKS 노드 그룹
+├── environments/                 # 환경별 설정
+│   └── prod/                    # Production 환경
+│       ├── main.tf              # 모듈 조합
+│       ├── variables.tf         # 변수 정의
+│       ├── terraform.tfvars     # 변수 값 (Git 제외!)
+│       ├── outputs.tf           # 출력 값
+│       ├── providers.tf         # Provider 설정
+│       └── backend.tf           # Backend 설정 (Git 제외!)
+└── README.md                    # 이 파일
+```
 
 ---
 
@@ -72,35 +161,6 @@ Terraform을 사용하여 AWS EKS(Elastic Kubernetes Service) 클러스터를 �
 
 ---
 
-## 📁 디렉토리 구조
-
-```
-terraform_test/
-├── bootstrap/                    # Backend 리소스 생성용
-│   ├── main.tf
-│   ├── variables.tf
-│   └── outputs.tf
-├── modules/                      # 재사용 가능한 모듈
-│   ├── vpc/                     # VPC 및 네트워킹
-│   ├── iam/                     # IAM 역할 및 정책
-│   ├── security-group/          # 보안 그룹
-│   ├── eks-cluster/             # EKS 클러스터
-│   └── eks-node-group/          # EKS 노드 그룹
-├── environments/                 # 환경별 설정
-│   └── prod/                    # Production 환경
-│       ├── main.tf              # 모듈 조합
-│       ├── variables.tf         # 변수 정의
-│       ├── terraform.tfvars     # 변수 값
-│       ├── outputs.tf           # 출력 값
-│       ├── providers.tf         # Provider 설정
-│       └── backend.tf           # Backend 설정
-├── BACKEND_SETUP.md             # Backend 설정 가이드
-├── plan.md                      # 프로젝트 계획서
-└── README.md                    # 이 파일
-```
-
----
-
 ## ✅ 사전 요구사항
 
 1. **AWS CLI**: 설치 및 구성 완료
@@ -114,7 +174,7 @@ terraform_test/
    terraform version
    ```
 
-3. **kubectl**: Kubernetes CLI (클러스터 접근용)
+3. **kubectl**: Kubernetes CLI
    ```bash
    kubectl version --client
    ```
@@ -127,9 +187,9 @@ terraform_test/
 
 ---
 
-## 🚀 빠른 시작
+## 🚀 배포 가이드
 
-### 1단계: Backend 리소스 생성
+### 1단계: Bootstrap - Backend 리소스 생성
 
 Terraform State를 저장할 S3 버킷과 DynamoDB 테이블을 생성합니다.
 
@@ -146,18 +206,22 @@ terraform plan
 # 리소스 생성
 terraform apply
 
-# 출력된 backend 설정을 복사해두세요
+# 출력 확인
 terraform output backend_config
 ```
 
-### 2단계: Backend 설정 업데이트
+**생성되는 리소스:**
+- S3 버킷: `eks-terraform-state-<AWS-ACCOUNT-ID>` (암호화, 버전 관리, 퍼블릭 액세스 차단)
+- DynamoDB 테이블: `eks-terraform-state-lock` (State Lock용)
 
-`environments/prod/backend.tf` 파일을 열고 출력된 S3 버킷 이름으로 업데이트:
+### 2단계: Backend 설정 확인
+
+`environments/prod/backend.tf` 파일에 올바른 계정 ID가 설정되어 있는지 확인:
 
 ```hcl
 terraform {
   backend "s3" {
-    bucket         = "eks-terraform-state-<YOUR-ACCOUNT-ID>"  # 변경
+    bucket         = "eks-terraform-state-912542578074"  # 본인의 계정 ID 확인
     key            = "prod/terraform.tfstate"
     region         = "ap-northeast-2"
     dynamodb_table = "eks-terraform-state-lock"
@@ -182,6 +246,13 @@ terraform plan
 terraform apply
 ```
 
+**배포 순서:**
+1. VPC & 네트워킹 (약 2-3분)
+2. IAM Roles & Policies (약 1분)
+3. EKS Cluster (약 10분) ⏰
+4. EKS Addons: vpc-cni, kube-proxy (각 1-2분)
+5. Node Group (약 3-5분)
+
 ### 4단계: kubectl 설정
 
 ```bash
@@ -190,47 +261,188 @@ aws eks update-kubeconfig --region ap-northeast-2 --name eks-cluster
 
 # 클러스터 확인
 kubectl get nodes
+
+# 예상 출력:
+# NAME                                              STATUS   ROLES    AGE   VERSION
+# ip-10-100-11-97.ap-northeast-2.compute.internal   Ready    <none>   3m    v1.31.13-eks-ecaa3a6
+# ip-10-100-12-46.ap-northeast-2.compute.internal   Ready    <none>   3m    v1.31.13-eks-ecaa3a6
+
+# 전체 Pod 확인
 kubectl get pods -A
 ```
 
 ---
 
-## 📚 상세 가이드
+## 🐛 문제 해결
 
-### 변수 커스터마이징
+### 실제 발생한 문제와 해결책
 
-`environments/prod/terraform.tfvars` 파일을 수정하여 설정을 변경할 수 있습니다:
+#### 문제 1: CoreDNS Addon 무한 대기
 
-```hcl
-# 클러스터 이름 변경
-cluster_name = "my-eks-cluster"
-
-# 노드 수 변경
-desired_size = 3
-max_size     = 5
-min_size     = 3
-
-# 인스턴스 타입 변경
-instance_types = ["t3.large"]
+**증상:**
+```
+module.eks_cluster.aws_eks_addon.coredns[0]: Still creating... [10m0s elapsed]
 ```
 
-### 모듈 이해하기
+**원인:**
+- CoreDNS는 **워커 노드에서 실행되는 Pod**
+- Node Group보다 먼저 설치되어 Pod을 배포할 노드가 없음
+- 결과: CoreDNS가 완료되지 않아 Node Group도 시작 안 됨 → **무한 대기**
 
-각 모듈은 독립적으로 사용 가능합니다. 자세한 내용은 각 모듈의 README.md를 참조하세요:
+**해결책 1**: CoreDNS를 나중에 설치
+```bash
+# 1. terraform.tfvars에서 coredns 임시 제거
+enabled_addons = ["vpc-cni", "kube-proxy"]  # coredns 제외
 
-- [VPC 모듈](modules/vpc/README.md)
-- [IAM 모듈](modules/iam/README.md)
-- [Security Group 모듈](modules/security-group/README.md)
-- [EKS Cluster 모듈](modules/eks-cluster/README.md)
-- [EKS Node Group 모듈](modules/eks-node-group/README.md)
+# 2. Node Group 먼저 생성
+terraform apply
 
-### Backend 설정
+# 3. coredns 다시 추가
+enabled_addons = ["vpc-cni", "kube-proxy", "coredns"]
 
-Terraform State를 안전하게 관리하는 방법은 [BACKEND_SETUP.md](BACKEND_SETUP.md)를 참조하세요.
+# 4. 다시 apply
+terraform apply
+```
+
+**해결책 2**: 이미 생성된 addon import
+```bash
+# AWS에 이미 addon이 존재하는 경우
+terraform import 'module.eks_cluster.aws_eks_addon.coredns[0]' eks-cluster:coredns
+terraform import 'module.eks_cluster.aws_eks_addon.kube_proxy[0]' eks-cluster:kube-proxy
+
+terraform apply
+```
+
+#### 문제 2: State Lock 오류
+
+**증상:**
+```
+Error: Error acquiring the state lock
+Lock ID: 73cf965d-b1f9-f9b9-91ca-2c2502b560b7
+```
+
+**원인:**
+- 이전 terraform apply가 비정상 종료됨 (Ctrl+C, 강제 중단 등)
+- DynamoDB의 Lock이 해제되지 않고 남아있음
+
+**해결책:**
+```bash
+# Lock 강제 해제
+terraform force-unlock 73cf965d-b1f9-f9b9-91ca-2c2502b560b7
+
+# 다시 apply
+terraform apply
+```
+
+#### 문제 3: Addon Already Exists
+
+**증상:**
+```
+Error: creating EKS Add-On (eks-cluster:kube-proxy):
+Addon already exists
+```
+
+**원인:**
+- apply 중단으로 AWS에는 리소스가 생성되었지만 Terraform state에는 기록 안 됨
+
+**해결책:**
+```bash
+# 현재 AWS의 addon 확인
+aws eks list-addons --cluster-name eks-cluster --region ap-northeast-2
+
+# Terraform state로 import
+terraform import 'module.eks_cluster.aws_eks_addon.kube_proxy[0]' eks-cluster:kube-proxy
+
+# 다시 apply
+terraform apply
+```
+
+### 일반적인 문제
+
+#### Backend 초기화 실패
+
+**해결:**
+```bash
+# 1. AWS 자격 증명 확인
+aws sts get-caller-identity
+
+# 2. S3 버킷 존재 확인
+aws s3 ls | grep terraform-state
+
+# 3. DynamoDB 테이블 확인
+aws dynamodb list-tables --region ap-northeast-2 | grep terraform-state-lock
+
+# 4. backend.tf 설정 재확인
+cat environments/prod/backend.tf
+```
+
+#### kubectl 접근 불가
+
+**해결:**
+```bash
+# kubeconfig 재설정
+aws eks update-kubeconfig --region ap-northeast-2 --name eks-cluster
+
+# AWS 자격 증명 확인
+aws sts get-caller-identity
+
+# 클러스터 상태 확인
+aws eks describe-cluster --name eks-cluster --region ap-northeast-2
+```
 
 ---
 
-## 💰 비용 예상
+## 🔐 보안 가이드
+
+### ⚠️ 절대 Git에 커밋하면 안 되는 파일
+
+```
+❌ terraform.tfstate         # 모든 인프라 정보 포함
+❌ terraform.tfvars          # 실제 설정 값
+❌ backend.tf                # AWS 계정 ID 포함
+❌ *.pem, *.key             # AWS 자격 증명
+❌ kubeconfig               # 클러스터 접근 정보
+```
+
+### ✅ Git에 커밋해야 하는 파일
+
+```
+✅ *.tf (backend.tf 제외)
+✅ *.example
+✅ modules/**/*
+✅ README.md
+✅ .gitignore
+```
+
+### 보안 체크리스트
+
+```bash
+# 민감한 파일이 Git에 추적되는지 확인 (결과 없어야 함)
+git ls-files | grep -E "terraform.tfvars$|backend.tf$"
+
+# .gitignore 동작 확인
+git check-ignore -v environments/prod/terraform.tfvars
+git check-ignore -v environments/prod/backend.tf
+```
+
+### AWS 키 노출 시 대응
+
+```bash
+# 1. 즉시 키 비활성화
+aws iam update-access-key --access-key-id EXPOSED_KEY_ID --status Inactive
+
+# 2. 새 키 생성
+aws iam create-access-key --user-name YOUR_USER
+
+# 3. 노출된 키 삭제
+aws iam delete-access-key --access-key-id EXPOSED_KEY_ID --user-name YOUR_USER
+```
+
+---
+
+## 💰 비용 관리
+
+### 예상 비용 (월)
 
 | 리소스 | 수량 | 예상 비용 (월) |
 |--------|------|----------------|
@@ -241,57 +453,28 @@ Terraform State를 안전하게 관리하는 방법은 [BACKEND_SETUP.md](BACKEN
 | CloudWatch Logs | - | $5 |
 | **총 예상 비용** | - | **약 $205/월** |
 
-비용 절감 팁:
-- NAT Gateway를 1개로 줄이기: -$32.5/월
-- 로깅 비활성화: -$5/월
-- Spot 인스턴스 사용: -$40/월
+### 비용 절감 팁
 
----
+1. **NAT Gateway를 1개로 줄이기**: -$32.5/월
+   ```hcl
+   # terraform.tfvars
+   enable_nat_gateway = false  # 또는 1개만 생성하도록 수정
+   ```
 
-## 🐛 문제 해결
+2. **로깅 비활성화**: -$5/월
+   ```hcl
+   enabled_log_types = []
+   ```
 
-### 1. Backend 초기화 실패
+3. **Spot 인스턴스 사용**: -$40/월
+   ```hcl
+   capacity_type = "SPOT"
+   ```
 
-**문제**: `terraform init` 실행 시 Backend 연결 실패
-
-**해결**:
-- bootstrap을 먼저 실행했는지 확인
-- `backend.tf`의 버킷 이름이 올바른지 확인
-- AWS 자격 증명이 올바른지 확인
-
-### 2. EKS 클러스터 생성 실패
-
-**문제**: `terraform apply` 실행 시 EKS 클러스터 생성 실패
-
-**해결**:
-- IAM 권한 확인
-- 서비스 쿼터 확인 (리전당 EKS 클러스터 제한)
-- VPC 서브넷 태그 확인
-
-### 3. kubectl 접근 불가
-
-**문제**: `kubectl get nodes` 실행 시 접근 불가
-
-**해결**:
-```bash
-# kubeconfig 재설정
-aws eks update-kubeconfig --region ap-northeast-2 --name eks-cluster
-
-# AWS CLI 자격 증명 확인
-aws sts get-caller-identity
-
-# 클러스터 상태 확인
-aws eks describe-cluster --name eks-cluster --region ap-northeast-2
-```
-
-### 4. 노드가 Ready 상태가 안 됨
-
-**문제**: 노드가 계속 NotReady 상태
-
-**해결**:
-- VPC CNI 플러그인 상태 확인
-- NAT Gateway 작동 확인
-- 노드 보안 그룹 규칙 확인
+4. **사용하지 않을 때 삭제**:
+   ```bash
+   terraform destroy
+   ```
 
 ---
 
@@ -301,12 +484,17 @@ aws eks describe-cluster --name eks-cluster --region ap-northeast-2
 
 ```bash
 cd environments/prod
+
+# 삭제 계획 확인
+terraform plan -destroy
+
+# 인프라 삭제
 terraform destroy
 ```
 
 ### Backend 리소스 삭제 (선택적)
 
-**주의**: State 파일이 손실됩니다!
+**⚠️ 주의**: State 파일이 손실됩니다!
 
 ```bash
 cd ../../bootstrap
@@ -321,30 +509,26 @@ terraform destroy
 
 ---
 
-## 📖 참고 자료
+## 📚 참고 자료
 
 - [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
 - [AWS EKS Best Practices](https://aws.github.io/aws-eks-best-practices/)
 - [EKS User Guide](https://docs.aws.amazon.com/eks/latest/userguide/)
 - [Kubernetes Documentation](https://kubernetes.io/docs/home/)
+- [Terraform S3 Backend](https://www.terraform.io/docs/language/settings/backends/s3.html)
 
 ---
 
-## 🤝 기여
+## 🎓 학습 포인트
 
-이 프로젝트에 기여하고 싶으시다면:
+이 프로젝트를 통해 배운 내용:
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
----
-
-## 📝 라이선스
-
-This project is licensed under the MIT License.
+1. **모듈화의 중요성**: 재사용 가능한 코드로 효율성 향상
+2. **Backend와 State Lock**: 팀 협업을 위한 필수 개념
+3. **의존성 관리**: 리소스 생성 순서가 중요함 (CoreDNS 문제)
+4. **Terraform Import**: 기존 리소스를 State에 등록하는 방법
+5. **보안**: 민감한 정보를 Git에서 분리하는 방법
+6. **문제 해결**: 실제 발생 가능한 문제와 대응 방법
 
 ---
 
@@ -356,7 +540,9 @@ This project is licensed under the MIT License.
 
 ---
 
-**생성일**: 2025-11-20
+**생성일**: 2025-11-21
 **Terraform 버전**: >= 1.0
 **AWS Provider 버전**: ~> 5.0
 **EKS 버전**: 1.31
+
+**마지막 업데이트**: 2025-11-21
