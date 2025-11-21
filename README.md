@@ -478,9 +478,17 @@ aws iam delete-access-key --access-key-id EXPOSED_KEY_ID --user-name YOUR_USER
 
 ---
 
-## 🧹 정리
+## 🧹 정리 (완전 삭제 가이드)
 
-### 전체 인프라 삭제
+### 순서가 중요합니다!
+
+**삭제 순서**:
+1. EKS 인프라 (environments/prod)
+2. Backend 리소스 (bootstrap)
+
+**잘못된 순서로 삭제 시**: State 파일이 S3에 있는데 S3를 먼저 삭제하면 문제 발생
+
+### 1단계: EKS 인프라 삭제
 
 ```bash
 cd environments/prod
@@ -488,24 +496,141 @@ cd environments/prod
 # 삭제 계획 확인
 terraform plan -destroy
 
-# 인프라 삭제
-terraform destroy
+# 인프라 삭제 (10-15분 소요)
+terraform destroy -auto-approve
 ```
 
-### Backend 리소스 삭제 (선택적)
+**삭제되는 리소스 (총 32개)**:
+- EKS 클러스터
+- Worker 노드 그룹
+- EKS Addons (CoreDNS, kube-proxy, vpc-cni)
+- VPC, 서브넷, NAT Gateway (삭제 시간 오래 걸림)
+- Internet Gateway
+- 라우팅 테이블
+- Elastic IP
+- IAM 역할 및 정책
 
-**⚠️ 주의**: State 파일이 손실됩니다!
+**확인**:
+```bash
+# State가 비었는지 확인
+terraform state list
+
+# AWS에서 실제 삭제 확인
+aws eks list-clusters --region ap-northeast-2
+aws ec2 describe-vpcs --region ap-northeast-2 --filters "Name=tag:Name,Values=eks-vpc"
+```
+
+### 2단계: Backend 리소스 삭제
+
+**⚠️ 주의**:
+- State 파일이 완전히 손실됩니다
+- 이 단계는 프로젝트를 완전히 제거할 때만 실행하세요
+
+#### 문제 발생: S3 버킷이 비어있지 않음
 
 ```bash
 cd ../../bootstrap
-terraform destroy
+terraform destroy -auto-approve
 ```
+
+**예상 에러**:
+```
+Error: deleting S3 Bucket: BucketNotEmpty
+The bucket you tried to delete is not empty.
+You must delete all versions in the bucket.
+```
+
+#### 해결 방법: S3 버킷 버전 수동 삭제
+
+**1. 모든 객체 버전 삭제**:
+```bash
+aws s3api delete-objects \
+  --bucket eks-terraform-state-912542578074 \
+  --delete "$(aws s3api list-object-versions \
+    --bucket eks-terraform-state-912542578074 \
+    --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+    --max-items 1000)"
+```
+
+**2. 삭제 마커 제거**:
+```bash
+aws s3api delete-objects \
+  --bucket eks-terraform-state-912542578074 \
+  --delete "$(aws s3api list-object-versions \
+    --bucket eks-terraform-state-912542578074 \
+    --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}')"
+```
+
+**3. Terraform destroy 재시도**:
+```bash
+# DynamoDB가 이미 삭제되어 Lock 에러 발생 시 -lock=false 사용
+terraform destroy -auto-approve -lock=false
+```
+
+**4. S3 버킷 수동 삭제** (여전히 남아있는 경우):
+```bash
+# 마지막 버전 삭제
+aws s3api delete-object \
+  --bucket eks-terraform-state-912542578074 \
+  --key prod/terraform.tfstate \
+  --version-id null
+
+# 버킷 삭제
+aws s3 rb s3://eks-terraform-state-912542578074
+```
+
+### 최종 확인
+
+**모든 리소스가 삭제되었는지 확인**:
+
+```bash
+echo "=== EKS 클러스터 ==="
+aws eks list-clusters --region ap-northeast-2
+
+echo "=== NAT Gateway (Active만) ==="
+aws ec2 describe-nat-gateways --region ap-northeast-2 \
+  --filter "Name=state,Values=available" \
+  --query 'NatGateways[*].NatGatewayId'
+
+echo "=== S3 버킷 ==="
+aws s3 ls | grep eks-terraform-state
+
+echo "=== DynamoDB 테이블 ==="
+aws dynamodb list-tables | grep eks-terraform-state-lock
+```
+
+**예상 결과**:
+- EKS 클러스터: `[]` (빈 배열)
+- NAT Gateway: 출력 없음 (deleted 상태는 한동안 보임, 정상)
+- S3 버킷: 출력 없음
+- DynamoDB: 출력 없음
+
+### AWS 콘솔에서 확인 시 주의사항
+
+**AWS 콘솔은 삭제된 리소스를 한동안 보여줍니다**:
+- NAT Gateway: `deleted` 상태로 표시됨
+- EC2 인스턴스: `terminated` 상태로 표시됨
+- VPC: 삭제되면 목록에서 사라짐
+
+**비용이 청구되는 리소스**: `available`, `running` 등 **활성** 상태만
+**비용 청구 안됨**: `deleted`, `terminated` 상태
+
+**필터 설정**:
+- EC2 콘솔 → NAT Gateways → Filter by State → "Available"만 선택
+- 이렇게 하면 실제 비용 청구되는 리소스만 보임
 
 ### 수동 정리가 필요한 리소스
 
+Terraform으로 관리하지 않는 리소스들:
 - CloudWatch Logs 로그 그룹
-- ENI (Elastic Network Interface)
-- 로드 밸런서 (생성한 경우)
+- ENI (Elastic Network Interface) - 자동 삭제됨
+- 로드 밸런서 (직접 생성한 경우)
+
+### 비용 절감 확인
+
+삭제 전후 비용 비교:
+- **삭제 전**: 월 $205 (EKS $73 + NAT $90 + EC2 $42)
+- **삭제 후**: $0
 
 ---
 
